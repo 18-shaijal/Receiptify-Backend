@@ -1,0 +1,61 @@
+{
+  "name": "receipt-generator-backend",
+  "version": "1.0.0",
+  "description": "Backend for bulk document/receipt generation system",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
+    "dev:nodemon": "nodemon src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "test": "jest",
+    "test:integration": "jest --testPathPattern=integration",
+    "lint": "eslint src/**/*.ts",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "receipt",
+    "document",
+    "generator",
+    "bulk",
+    "excel"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.967.0",
+    "@aws-sdk/client-sts": "^3.967.0",
+    "@aws-sdk/s3-request-presigner": "^3.967.0",
+    "archiver": "^6.0.1",
+    "cors": "^2.8.5",
+    "docxtemplater": "^3.42.3",
+    "dotenv": "^16.3.1",
+    "exceljs": "^4.4.0",
+    "express": "^4.18.2",
+    "libreoffice-convert": "^1.6.0",
+    "mongoose": "^8.22.1",
+    "multer": "^1.4.5-lts.1",
+    "pizzip": "^3.1.6",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/archiver": "^6.0.2",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jest": "^29.5.11",
+    "@types/multer": "^1.4.11",
+    "@types/node": "^20.10.6",
+    "@types/supertest": "^6.0.2",
+    "@types/uuid": "^9.0.7",
+    "@typescript-eslint/eslint-plugin": "^6.17.0",
+    "@typescript-eslint/parser": "^6.17.0",
+    "eslint": "^8.56.0",
+    "jest": "^29.7.0",
+    "nodemon": "^3.1.11",
+    "supertest": "^6.3.3",
+    "ts-jest": "^29.1.1",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.3.3"
+  }
+}
