@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: receipt-generator-backend
+    env: docker
+    plan: free
+    region: ohio
+    branch: main
+    envVars:
+      - key: PORT
+        value: 5002
+      - key: NODE_ENV
+        value: production
+      - key: LIBREOFFICE_PATH
+        value: /usr/bin/libreoffice
+      - key: MONGODB_URI
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_REGION
+        sync: false
+      - key: AWS_S3_BUCKET_NAME
+        sync: false
