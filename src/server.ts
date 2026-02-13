@@ -21,7 +21,6 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 ensureDirectoryExists(CONFIG.UPLOAD_DIR);
-ensureDirectoryExists(CONFIG.GENERATED_DIR);
 
 // Connect to MongoDB
 mongoose.connect(CONFIG.MONGODB_URI)
@@ -62,10 +61,9 @@ app.use((_req: Request, res: Response) => {
 app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`📁 Upload directory: ${path.resolve(CONFIG.UPLOAD_DIR)}`);
-    console.log(`📄 Generated files directory: ${path.resolve(CONFIG.GENERATED_DIR)}`);
 
     // Schedule file cleanup
-    scheduleCleanup([CONFIG.UPLOAD_DIR, CONFIG.GENERATED_DIR], CONFIG.CLEANUP_INTERVAL_HOURS, CONFIG.CLEANUP_INTERVAL_HOURS);
+    scheduleCleanup([CONFIG.UPLOAD_DIR], CONFIG.CLEANUP_INTERVAL_HOURS, CONFIG.CLEANUP_INTERVAL_HOURS);
     console.log(`🧹 File cleanup scheduled every ${CONFIG.CLEANUP_INTERVAL_HOURS} hours`);
 });
 

@@ -70,34 +70,4 @@ export const ensureDirectoryExists = (dirPath: string): void => {
     }
 };
 
-/**
- * Deletes a file safely
- */
-export const deleteFile = (filePath: string): void => {
-    try {
-        if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-        }
-    } catch (error) {
-        console.error(`Error deleting file ${filePath}:`, error);
-    }
-};
 
-/**
- * Validates that required fields are present in request body
- */
-export const validateRequiredFields = (
-    body: any,
-    requiredFields: string[]
-): { valid: boolean; error?: string } => {
-    const missing = requiredFields.filter(field => !body[field]);
-
-    if (missing.length > 0) {
-        return {
-            valid: false,
-            error: `Missing required fields: ${missing.join(', ')}`
-        };
-    }
-
-    return { valid: true };
-};

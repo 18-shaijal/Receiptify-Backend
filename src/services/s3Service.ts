@@ -1,5 +1,7 @@
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { Upload } from "@aws-sdk/lib-storage";
+import { PassThrough } from "stream";
 import { CONFIG } from "../config";
 import fs from "fs";
 
@@ -40,37 +42,45 @@ export const getPresignedDownloadUrl = async (key: string, expiresIn: number = 3
     return await getSignedUrl(s3Client, command, { expiresIn });
 };
 
-/**
- * Delete a file from S3
- */
-export const deleteFromS3 = async (key: string): Promise<void> => {
-    const command = new DeleteObjectCommand({
-        Bucket: CONFIG.AWS.S3_BUCKET_NAME,
-        Key: key,
-    });
-
-    await s3Client.send(command);
-};
 
 /**
- * Download a file from S3 to a local path
+ * Download a file from S3 as a Buffer
  */
-export const downloadFromS3 = async (key: string, localPath: string): Promise<void> => {
+export const downloadAsBuffer = async (key: string): Promise<Buffer> => {
     const command = new GetObjectCommand({
         Bucket: CONFIG.AWS.S3_BUCKET_NAME,
         Key: key,
     });
 
     const { Body } = await s3Client.send(command);
+    if (!Body) throw new Error('Empty body from S3');
 
-    if (Body) {
-        const stream = Body as any;
-        const writeStream = fs.createWriteStream(localPath);
+    const stream = Body as any;
+    const chunks: any[] = [];
+    return new Promise((resolve, reject) => {
+        stream.on('data', (chunk: any) => chunks.push(chunk));
+        stream.on('error', (err: any) => reject(err));
+        stream.on('end', () => resolve(Buffer.concat(chunks)));
+    });
+};
 
-        return new Promise((resolve, reject) => {
-            stream.pipe(writeStream)
-                .on('finish', resolve)
-                .on('error', reject);
-        });
-    }
+/**
+ * Get a PassThrough stream to upload to S3
+ */
+export const uploadFromStream = (key: string, contentType: string) => {
+    const passThrough = new PassThrough();
+    const upload = new Upload({
+        client: s3Client,
+        params: {
+            Bucket: CONFIG.AWS.S3_BUCKET_NAME,
+            Key: key,
+            Body: passThrough,
+            ContentType: contentType
+        },
+    });
+
+    return {
+        stream: passThrough,
+        promise: upload.done()
+    };
 };

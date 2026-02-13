@@ -1,4 +1,3 @@
-import fs from 'fs';
 import path from 'path';
 import PizZip from 'pizzip';
 import Docxtemplater from 'docxtemplater';
@@ -6,35 +5,31 @@ import { sanitizeFilename } from '../utils/validators';
 import { formatDocxtemplaterError } from './templateService';
 
 export interface GenerationOptions {
-    templatePath: string;
-    outputDir: string;
+    templateBuffer: Buffer;
     data: Record<string, any>[];
     fileNameTemplate?: string;
 }
 
+export interface GeneratedFile {
+    name: string;
+    content: Buffer;
+}
+
 export interface GenerationResult {
     success: boolean;
-    filesGenerated: string[];
+    filesGenerated: GeneratedFile[];
     errors: string[];
 }
 
 /**
- * Generates documents from template and data
+ * Generates documents from template buffer and data
  */
 export const generateDocuments = async (
     options: GenerationOptions
 ): Promise<GenerationResult> => {
-    const { templatePath, outputDir, data, fileNameTemplate } = options;
-    const filesGenerated: string[] = [];
+    const { templateBuffer, data, fileNameTemplate } = options;
+    const filesGenerated: GeneratedFile[] = [];
     const errors: string[] = [];
-
-    // Ensure output directory exists
-    if (!fs.existsSync(outputDir)) {
-        fs.mkdirSync(outputDir, { recursive: true });
-    }
-
-    // Read template once
-    const templateContent = fs.readFileSync(templatePath, 'binary');
 
     // Process each row
     for (let i = 0; i < data.length; i++) {
@@ -43,7 +38,7 @@ export const generateDocuments = async (
             const rowNumber = i + 1;
 
             // Create a new document instance for each row
-            const zip = new PizZip(templateContent);
+            const zip = new PizZip(templateBuffer);
             const doc = new Docxtemplater(zip, {
                 paragraphLoop: true,
                 linebreaks: true,
@@ -68,11 +63,11 @@ export const generateDocuments = async (
 
             // Generate filename
             const fileName = generateFileName(rowNumber, rowData, fileNameTemplate);
-            const outputPath = path.join(outputDir, fileName);
 
-            // Write file
-            fs.writeFileSync(outputPath, output);
-            filesGenerated.push(outputPath);
+            filesGenerated.push({
+                name: fileName,
+                content: output
+            });
 
         } catch (error: any) {
             const formattedError = formatDocxtemplaterError(error);
@@ -89,15 +84,13 @@ export const generateDocuments = async (
 };
 
 /**
- * Generates a single preview document
+ * Generates a single preview document buffer
  */
 export const generatePreviewDocument = async (
-    templatePath: string,
-    data: Record<string, any>,
-    outputPath: string
-): Promise<void> => {
-    const templateContent = fs.readFileSync(templatePath, 'binary');
-    const zip = new PizZip(templateContent);
+    templateBuffer: Buffer,
+    data: Record<string, any>
+): Promise<Buffer> => {
+    const zip = new PizZip(templateBuffer);
 
     const doc = new Docxtemplater(zip, {
         paragraphLoop: true,
@@ -118,18 +111,10 @@ export const generatePreviewDocument = async (
         throw formatDocxtemplaterError(error);
     }
 
-    const output = doc.getZip().generate({
+    return doc.getZip().generate({
         type: 'nodebuffer',
         compression: 'DEFLATE',
     });
-
-    // Ensure output directory exists
-    const outputDir = path.dirname(outputPath);
-    if (!fs.existsSync(outputDir)) {
-        fs.mkdirSync(outputDir, { recursive: true });
-    }
-
-    fs.writeFileSync(outputPath, output);
 };
 
 /**
@@ -141,12 +126,42 @@ const generateFileName = (
     template?: string
 ): string => {
     if (template) {
-        // Replace placeholders in filename template
         let fileName = template;
+
+        // Normalize data keys to uppercase for matching
+        const normalizedData: Record<string, any> = {};
         Object.keys(data).forEach(key => {
-            const value = data[key] || '';
-            fileName = fileName.replace(`{${key}}`, sanitizeFilename(String(value)));
+            normalizedData[key.toUpperCase()] = data[key];
         });
+
+        // Replace both {{KEY}} and {KEY} formats, globally and case-insensitively
+        // We iterate over all keys in data to replace them in the template
+        Object.keys(normalizedData).forEach(key => {
+            const value = normalizedData[key] || '';
+            const sanitizedValue = sanitizeFilename(String(value));
+
+            // Escape key for regex
+            const escapedKey = key.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+
+            // Replace {{KEY}}
+            const regexDouble = new RegExp(`{{${escapedKey}}}`, 'gi');
+            fileName = fileName.replace(regexDouble, sanitizedValue);
+
+            // Replace {KEY}
+            const regexSingle = new RegExp(`{${escapedKey}}`, 'gi');
+            fileName = fileName.replace(regexSingle, sanitizedValue);
+        });
+
+        // Ensure we don't have empty filename
+        if (!fileName.trim()) {
+            fileName = `document_${rowNumber}`;
+        }
+
+        // Add default extension if missing (will be handled by caller for specific formats)
+        if (!path.extname(fileName)) {
+            fileName += '.docx';
+        }
+
         return fileName;
     }
 

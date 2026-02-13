@@ -2,25 +2,27 @@ import fs from 'fs';
 import path from 'path';
 import archiver from 'archiver';
 import { v4 as uuidv4 } from 'uuid';
+import { uploadFromStream } from './s3Service';
+import { GeneratedFile } from './documentGenerationService';
 
 export interface ZipOptions {
-    docxFiles: string[];
-    odtFiles: string[];
+    filesByFormat: Record<string, string[]>;
     outputDir: string;
 }
 
 export interface ZipResult {
     success: boolean;
     zipPath?: string;
+    s3Key?: string;
     sessionId?: string;
     error?: string;
 }
 
 /**
- * Creates ZIP archive with DOCX and ODT files
+ * Creates ZIP archive with files organized by format folders
  */
 export const createZipArchive = async (options: ZipOptions): Promise<ZipResult> => {
-    const { docxFiles, odtFiles, outputDir } = options;
+    const { filesByFormat, outputDir } = options;
     const sessionId = uuidv4();
 
     try {
@@ -38,7 +40,6 @@ export const createZipArchive = async (options: ZipOptions): Promise<ZipResult> 
         return new Promise((resolve, reject) => {
             // Handle stream events
             output.on('close', () => {
-                console.log(`ZIP created: ${archive.pointer()} bytes`);
                 resolve({
                     success: true,
                     zipPath,
@@ -56,20 +57,15 @@ export const createZipArchive = async (options: ZipOptions): Promise<ZipResult> 
             // Pipe archive to output file
             archive.pipe(output);
 
-            // Add DOCX files
-            docxFiles.forEach(filePath => {
-                if (fs.existsSync(filePath)) {
-                    const fileName = path.basename(filePath);
-                    archive.file(filePath, { name: `docx/${fileName}` });
-                }
-            });
-
-            // Add ODT files
-            odtFiles.forEach(filePath => {
-                if (fs.existsSync(filePath)) {
-                    const fileName = path.basename(filePath);
-                    archive.file(filePath, { name: `odt/${fileName}` });
-                }
+            // Add files for each format
+            Object.entries(filesByFormat).forEach(([formatExt, files]) => {
+                const folderName = formatExt.replace('.', '');
+                files.forEach(filePath => {
+                    if (fs.existsSync(filePath)) {
+                        const fileName = path.basename(filePath);
+                        archive.file(filePath, { name: `${folderName}/${fileName}` });
+                    }
+                });
             });
 
             // Finalize archive
@@ -114,5 +110,57 @@ export const createSimpleZip = async (
     } catch (error) {
         console.error('Error creating simple ZIP:', error);
         return false;
+    }
+};
+
+/**
+ * Creates ZIP archive from memory buffers and streams directly to S3
+ */
+export const streamZipToS3 = async (
+    filesByFormat: Record<string, GeneratedFile[]>,
+    s3Key: string
+): Promise<ZipResult> => {
+    try {
+        const { stream, promise } = uploadFromStream(s3Key, 'application/zip');
+        const archive = archiver('zip', {
+            zlib: { level: 9 }
+        });
+
+        return new Promise((resolve, reject) => {
+            stream.on('error', (err) => {
+                reject({ success: false, error: err.message });
+            });
+
+            archive.on('error', (err) => {
+                reject({ success: false, error: err.message });
+            });
+
+            archive.pipe(stream);
+
+            // Add buffers for each format
+            Object.entries(filesByFormat).forEach(([formatExt, files]) => {
+                const folderName = formatExt.replace('.', '');
+                files.forEach(file => {
+                    archive.append(file.content, { name: `${folderName}/${file.name}` });
+                });
+            });
+
+            archive.finalize();
+
+            promise.then(() => {
+                resolve({
+                    success: true,
+                    s3Key
+                });
+            }).catch(err => {
+                reject({ success: false, error: err.message });
+            });
+        });
+    } catch (error: any) {
+        console.error('Error streaming ZIP to S3:', error);
+        return {
+            success: false,
+            error: error.message
+        };
     }
 };

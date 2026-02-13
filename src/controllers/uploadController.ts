@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { validateFileType, validateFileSize } from '../utils/validators';
 import { uploadToS3 } from '../services/s3Service';
+import { parseExcelFile, validateExcelData } from '../services/excelService';
 import DocumentSession from '../models/documentModel';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
@@ -150,25 +151,36 @@ export const uploadExcel = async (req: Request, res: Response): Promise<void> =>
         // Use the same sessionId if provided (from template upload) 
         // to link them together, or generate a new one if it's a fresh flow.
         const sessionId = (multerReq.body && multerReq.body.sessionId) || uuidv4();
-        const s3Key = `data/${sessionId}-${multerReq.file.filename}`;
+        // Parse Excel file immediately
+        const fileBuffer = fs.readFileSync(multerReq.file.path);
+        const excelData = await parseExcelFile(fileBuffer);
 
-        // Upload to S3
-        await uploadToS3(multerReq.file.path, s3Key, multerReq.file.mimetype);
+        // Validate parsed data
+        const dataValidation = validateExcelData(excelData);
+        if (!dataValidation.valid) {
+            fs.unlinkSync(multerReq.file.path); // Cleanup
+            res.status(400).json({
+                success: false,
+                error: dataValidation.error
+            });
+            return;
+        }
 
-        // Delete local file immediately after S3 upload
+        // Delete local file immediately after parsing
         try {
             fs.unlinkSync(multerReq.file.path);
         } catch (unlinkErr) {
             console.error(`Failed to delete local data file: ${multerReq.file.path}`, unlinkErr);
         }
 
-        // Save to MongoDB
+        // Save to MongoDB with parsed data
         const session = new DocumentSession({
             sessionId,
             originalFileName: multerReq.file.originalname,
-            s3Key,
             fileType: 'excel',
-            status: 'uploaded'
+            status: 'uploaded',
+            rows: excelData.rows,
+            headers: excelData.headers
         });
         await session.save();
 
@@ -178,8 +190,9 @@ export const uploadExcel = async (req: Request, res: Response): Promise<void> =>
                 sessionId,
                 fileName: multerReq.file.originalname,
                 originalName: multerReq.file.originalname,
-                s3Key,
-                size: multerReq.file.size
+                size: multerReq.file.size,
+                rowCount: excelData.rows.length,
+                headers: excelData.headers
             }
         });
     } catch (error: any) {

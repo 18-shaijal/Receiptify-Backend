@@ -2,8 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import libre from 'libreoffice-convert';
 import { promisify } from 'util';
+import { CONFIG } from '../config';
 
-const convertAsync = promisify(libre.convert);
+const convertAsync = promisify(libre.convertWithOptions);
 
 export interface ConversionResult {
     success: boolean;
@@ -12,21 +13,24 @@ export interface ConversionResult {
 }
 
 /**
- * Converts DOCX file to ODT format
+ * Converts DOCX file to a target format (PDF, ODT, etc.)
  */
-export const convertDocxToOdt = async (
+export const convertDocx = async (
     docxPath: string,
-    outputDir: string
+    outputDir: string,
+    targetExtension: string
 ): Promise<ConversionResult> => {
     try {
         // Read DOCX file
         const docxBuffer = fs.readFileSync(docxPath);
 
-        // Convert to ODT
-        const odtBuffer = await convertAsync(docxBuffer, '.odt', undefined);
+        // Convert to target format
+        const outputBuffer = await convertAsync(docxBuffer, targetExtension.replace('.', ''), undefined, {
+            sofficeBinaryPaths: [CONFIG.LIBREOFFICE_PATH]
+        });
 
         // Generate output path
-        const fileName = path.basename(docxPath, '.docx') + '.odt';
+        const fileName = path.basename(docxPath, '.docx') + targetExtension;
         const outputPath = path.join(outputDir, fileName);
 
         // Ensure output directory exists
@@ -34,15 +38,15 @@ export const convertDocxToOdt = async (
             fs.mkdirSync(outputDir, { recursive: true });
         }
 
-        // Write ODT file
-        fs.writeFileSync(outputPath, odtBuffer);
+        // Write file
+        fs.writeFileSync(outputPath, outputBuffer);
 
         return {
             success: true,
             outputPath
         };
     } catch (error: any) {
-        console.error('Error converting DOCX to ODT:', error);
+        console.error(`Error converting DOCX to ${targetExtension}:`, error);
         return {
             success: false,
             error: error.message
@@ -51,26 +55,28 @@ export const convertDocxToOdt = async (
 };
 
 /**
- * Batch converts multiple DOCX files to ODT
+ * Batch converts multiple DOCX files to multiple target formats
  */
-export const batchConvertDocxToOdt = async (
+export const batchConvertDocx = async (
     docxFiles: string[],
-    outputDir: string
-): Promise<{ successful: string[]; failed: string[] }> => {
-    const successful: string[] = [];
-    const failed: string[] = [];
+    outputDir: string,
+    targetExtensions: string[]
+): Promise<Record<string, string[]>> => {
+    const results: Record<string, string[]> = {};
 
-    for (const docxPath of docxFiles) {
-        const result = await convertDocxToOdt(docxPath, outputDir);
+    for (const ext of targetExtensions) {
+        results[ext] = [];
+        const subDir = path.join(outputDir, ext.replace('.', ''));
 
-        if (result.success && result.outputPath) {
-            successful.push(result.outputPath);
-        } else {
-            failed.push(docxPath);
+        for (const docxPath of docxFiles) {
+            const result = await convertDocx(docxPath, subDir, ext);
+            if (result.success && result.outputPath) {
+                results[ext].push(result.outputPath);
+            }
         }
     }
 
-    return { successful, failed };
+    return results;
 };
 
 /**
@@ -80,7 +86,9 @@ export const isLibreOfficeAvailable = async (): Promise<boolean> => {
     try {
         // Try a simple conversion to test if LibreOffice is accessible
         const testBuffer = Buffer.from('test');
-        await convertAsync(testBuffer, '.odt', undefined);
+        await convertAsync(testBuffer, 'odt', undefined, {
+            sofficeBinaryPaths: [CONFIG.LIBREOFFICE_PATH]
+        });
         return true;
     } catch (error) {
         console.error('LibreOffice is not available:', error);

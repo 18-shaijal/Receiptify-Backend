@@ -1,16 +1,13 @@
 import { Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
-import { parseExcelFile, validateExcelData } from '../services/excelService';
+import os from 'os';
 import { extractPlaceholders, validateTemplate } from '../services/templateService';
-import { generateDocuments, generatePreviewDocument } from '../services/documentGenerationService';
-import { batchConvertDocxToOdt } from '../services/conversionService';
-import { createZipArchive } from '../services/zipService';
-import { CONFIG } from '../config';
-import { downloadFromS3, uploadToS3, getPresignedDownloadUrl } from '../services/s3Service';
+import { generateDocuments, generatePreviewDocument, GeneratedFile } from '../services/documentGenerationService';
+import { batchConvertDocx } from '../services/conversionService';
+import { streamZipToS3 } from '../services/zipService';
+import { uploadToS3, getPresignedDownloadUrl, downloadAsBuffer } from '../services/s3Service';
 import DocumentSession from '../models/documentModel';
-
-// No local constant needed, use CONFIG.GENERATED_DIR instead
 
 /**
  * Validate template and Excel match
@@ -39,41 +36,39 @@ export const validateFiles = async (req: Request, res: Response): Promise<void> 
             return;
         }
 
-        // Download files locally for validation
-        const sessionDir = path.join(CONFIG.GENERATED_DIR, sessionId, 'temp');
+        // Validate template against Excel headers stored in DB
+        // We don't need to download/parse Excel anymore
+        const excelHeaders = excelSession.headers || [];
+        const rowCount = excelSession.rows?.length || 0;
+
+        // Download template locally for validation (placeholder extraction still needs file or buffer)
+        // We can use buffer to avoid saving to disk
+        const templateBuffer = await downloadAsBuffer(templateSession.s3Key!);
+
+        // Extract placeholders from template buffer
+        // (Need to update templateService to support buffer or write temp file)
+        // For now, let's write temp file for templateService compatibility if it doesn't support buffer yet
+        // standard templateService.extractPlaceholders takes a file path.
+        const sessionDir = path.join(os.tmpdir(), 'receipt-gen', sessionId, 'temp');
         if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
-
         const templatePath = path.join(sessionDir, templateSession.originalFileName);
-        const excelPath = path.join(sessionDir, excelSession.originalFileName);
+        fs.writeFileSync(templatePath, templateBuffer);
 
-        await downloadFromS3(templateSession.s3Key!, templatePath);
-        await downloadFromS3(excelSession.s3Key!, excelPath);
-
-        // Extract placeholders from template
         const templateInfo = extractPlaceholders(templatePath);
 
-        // Parse Excel file
-        const excelData = await parseExcelFile(excelPath);
-
-        // Validate Excel data
-        const excelValidation = validateExcelData(excelData);
-        if (!excelValidation.valid) {
-            res.status(400).json({
-                success: false,
-                error: excelValidation.error
-            });
-            return;
-        }
+        // Clean up template file
+        fs.unlinkSync(templatePath);
+        fs.rmdirSync(sessionDir);
 
         // Validate template against Excel
-        const validation = validateTemplate(templateInfo.placeholders, excelData.headers);
+        const validation = validateTemplate(templateInfo.placeholders, excelHeaders);
 
         res.json({
             success: true,
             data: {
                 placeholders: templateInfo.placeholders,
-                excelHeaders: excelData.headers,
-                rowCount: excelData.rows.length,
+                excelHeaders: excelHeaders,
+                rowCount: rowCount,
                 validation: {
                     valid: validation.valid,
                     missingInExcel: validation.missingInExcel,
@@ -86,7 +81,8 @@ export const validateFiles = async (req: Request, res: Response): Promise<void> 
         console.error('Error validating files:', error);
         res.status(500).json({
             success: false,
-            error: error.message || 'Failed to validate files'
+            error: error.message || 'Failed to validate files',
+            details: error.stack
         });
     }
 };
@@ -118,20 +114,13 @@ export const generatePreview = async (req: Request, res: Response): Promise<void
             return;
         }
 
-        // Download files locally for preview generation
-        const sessionDir = path.join(CONFIG.GENERATED_DIR, sessionId, 'preview');
-        if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
+        // Download template in-memory
+        const templateBuffer = await downloadAsBuffer(templateSession.s3Key!);
 
-        const templatePath = path.join(sessionDir, templateSession.originalFileName);
-        const excelPath = path.join(sessionDir, excelSession.originalFileName);
+        // Get data from DB
+        const rows = excelSession.rows || [];
 
-        await downloadFromS3(templateSession.s3Key!, templatePath);
-        await downloadFromS3(excelSession.s3Key!, excelPath);
-
-        // Parse Excel file
-        const excelData = await parseExcelFile(excelPath);
-
-        if (excelData.rows.length === 0) {
+        if (rows.length === 0) {
             res.status(400).json({
                 success: false,
                 error: 'Excel file has no data rows'
@@ -140,22 +129,25 @@ export const generatePreview = async (req: Request, res: Response): Promise<void
         }
 
         // Use first row for preview
-        const previewData = excelData.rows[0];
+        const previewData = rows[0];
 
-        // Generate preview document locally
-        const previewPath = path.join(sessionDir, 'preview.docx');
-        await generatePreviewDocument(templatePath, previewData, previewPath);
+        // Generate preview document in-memory
+        const previewBuffer = await generatePreviewDocument(templateBuffer, previewData);
 
-        // In-memory preview is handled by the frontend, but we could upload this to S3 too 
-        // if we wanted a persistent preview link. For now, we'll keep the existing logic 
-        // that likely reads this file or returns the data.
-        // Actually, the previous implementation sent the path. 
-        // Let's stick to returning data so we can cleanup.
+        // For preview, we could send the buffer as base64 or upload to a temporary S3 key
+        // Let's upload to a temp S3 key so the frontend can download it if needed
+        const previewS3Key = `previews/${sessionId}/preview.docx`;
+        const tempPath = path.join(os.tmpdir(), `preview_${sessionId}.docx`);
+        fs.writeFileSync(tempPath, previewBuffer);
+        await uploadToS3(tempPath, previewS3Key, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        fs.unlinkSync(tempPath);
+
+        const downloadUrl = await getPresignedDownloadUrl(previewS3Key);
 
         res.json({
             success: true,
             data: {
-                previewPath,
+                previewUrl: downloadUrl,
                 sessionId,
                 previewData
             }
@@ -200,28 +192,22 @@ export const generateDocumentsBulk = async (req: Request, res: Response): Promis
             return;
         }
 
-        // Download files locally for bulk generation
-        const sessionDir = path.join(CONFIG.GENERATED_DIR, sessionId);
-        const tempDir = path.join(sessionDir, 'temp');
-        if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+        // Download template in-memory
+        const templateBuffer = await downloadAsBuffer(templateSession.s3Key!);
 
-        const templatePath = path.join(tempDir, templateSession.originalFileName);
-        const excelPath = path.join(tempDir, excelSession.originalFileName);
+        // Get data from DB
+        // In a real production scenario with huge data, we would stream this cursor 
+        // or use pagination. For now, fetching the array is fine as mongo documents < 16MB.
+        const excelRows = excelSession.rows || [];
 
-        await downloadFromS3(templateSession.s3Key!, templatePath);
-        await downloadFromS3(excelSession.s3Key!, excelPath);
+        const selectedFormats = req.body.formats || ['.docx'];
+        const fileNamePattern = req.body.fileNamePattern;
 
-        // Parse Excel file
-        const excelData = await parseExcelFile(excelPath);
-
-        const docxDir = path.join(sessionDir, 'docx');
-        const odtDir = path.join(sessionDir, 'odt');
-
-        // Generate DOCX documents
+        // Generate documents in-memory
         const generationResult = await generateDocuments({
-            templatePath,
-            outputDir: docxDir,
-            data: excelData.rows
+            templateBuffer,
+            data: excelRows,
+            fileNameTemplate: fileNamePattern
         });
 
         if (!generationResult.success) {
@@ -233,46 +219,59 @@ export const generateDocumentsBulk = async (req: Request, res: Response): Promis
             return;
         }
 
-        // Convert to ODT
-        const conversionResult = await batchConvertDocxToOdt(
-            generationResult.filesGenerated,
-            odtDir
-        );
+        // Prepare files for ZIP
+        const filesByFormat: Record<string, GeneratedFile[]> = {};
+        filesByFormat['.docx'] = generationResult.filesGenerated;
 
-        // Create ZIP archive
-        const zipResult = await createZipArchive({
-            docxFiles: generationResult.filesGenerated,
-            odtFiles: conversionResult.successful,
-            outputDir: sessionDir
-        });
+        // Handle conversion if needed
+        const formatsToConvert = selectedFormats.filter((fmt: string) => fmt !== '.docx');
+        if (formatsToConvert.length > 0) {
+            // For conversion, we still need physical files for LibreOffice (until addresssed)
+            // Use OS temp dir
+            const conversionDir = path.join(os.tmpdir(), `conversion_${sessionId}`);
+            if (!fs.existsSync(conversionDir)) fs.mkdirSync(conversionDir, { recursive: true });
+
+            const docxPaths: string[] = [];
+            for (const file of generationResult.filesGenerated) {
+                const filePath = path.join(conversionDir, file.name);
+                fs.writeFileSync(filePath, file.content);
+                docxPaths.push(filePath);
+            }
+
+            const conversionResults = await batchConvertDocx(
+                docxPaths,
+                conversionDir,
+                formatsToConvert
+            );
+
+            // Read converted files back into buffers
+            for (const [ext, paths] of Object.entries(conversionResults)) {
+                filesByFormat[ext] = paths.map(p => ({
+                    name: path.basename(p),
+                    content: fs.readFileSync(p)
+                }));
+            }
+
+            // Cleanup conversion dir
+            fs.rmSync(conversionDir, { recursive: true, force: true });
+        }
+
+        // Create ZIP archive and stream directly to S3
+        const zipFileName = `documents_${sessionId}.zip`;
+        const zipS3Key = `generated/${sessionId}/${zipFileName}`;
+
+        const zipResult = await streamZipToS3(filesByFormat, zipS3Key);
 
         if (!zipResult.success) {
             res.status(500).json({
                 success: false,
-                error: 'Failed to create ZIP archive'
+                error: 'Failed to create or upload ZIP archive'
             });
             return;
         }
 
-        // Upload ZIP to S3
-        const zipFileName = `documents_${sessionId}.zip`;
-        const zipS3Key = `generated/${sessionId}/${zipFileName}`;
-        await uploadToS3(zipResult.zipPath!, zipS3Key, 'application/zip');
-
         // Generate Pre-signed URL
         const downloadUrl = await getPresignedDownloadUrl(zipS3Key);
-
-        // Immediate cleanup of local generation artifacts
-        try {
-            if (zipResult.zipPath && fs.existsSync(zipResult.zipPath)) {
-                fs.unlinkSync(zipResult.zipPath);
-            }
-            if (tempDir && fs.existsSync(tempDir)) {
-                fs.rmSync(tempDir, { recursive: true, force: true });
-            }
-        } catch (cleanupErr) {
-            console.error('Failed to cleanup local generation artifacts:', cleanupErr);
-        }
 
         // Update session in MongoDB
         await DocumentSession.updateMany({ sessionId }, { status: 'processed' });
@@ -285,11 +284,6 @@ export const generateDocumentsBulk = async (req: Request, res: Response): Promis
                 downloadUrl,
                 zipFileName
             }
-        });
-
-        // Background Cleanup: Delete local session directory
-        fs.rm(sessionDir, { recursive: true, force: true }, (err) => {
-            if (err) console.error(`Error cleaning up sessionDir ${sessionId}:`, err);
         });
     } catch (error: any) {
         console.error('Error generating documents:', error);

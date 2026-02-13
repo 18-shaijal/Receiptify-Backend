@@ -8,9 +8,17 @@ export interface ExcelData {
 /**
  * Parses Excel file and returns structured data
  */
-export const parseExcelFile = async (filePath: string): Promise<ExcelData> => {
+/**
+ * Parses Excel file and returns structured data
+ */
+export const parseExcelFile = async (input: string | Buffer): Promise<ExcelData> => {
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.readFile(filePath);
+
+    if (Buffer.isBuffer(input)) {
+        await workbook.xlsx.load(input as any);
+    } else {
+        await workbook.xlsx.readFile(input);
+    }
 
     // Get first worksheet
     const worksheet = workbook.worksheets[0];
@@ -84,17 +92,13 @@ export const parseExcelFile = async (filePath: string): Promise<ExcelData> => {
  * Formats date to readable string
  */
 const formatDate = (date: Date): string => {
+    // Check if date is valid
+    if (isNaN(date.getTime())) return '';
+
     const day = String(date.getDate()).padStart(2, '0');
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const year = date.getFullYear();
     return `${day}/${month}/${year}`;
-};
-
-/**
- * Formats number with specified decimal places
- */
-export const formatNumber = (num: number, decimals: number = 2): string => {
-    return num.toFixed(decimals);
 };
 
 /**

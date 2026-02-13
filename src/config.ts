@@ -6,7 +6,6 @@ dotenv.config();
 
 export const CONFIG = {
     UPLOAD_DIR: process.env.UPLOAD_DIR || path.join(__dirname, '..', 'uploads'),
-    GENERATED_DIR: process.env.GENERATED_DIR || path.join(__dirname, '..', 'generated'),
     PORT: process.env.PORT || 5001,
     CORS_ORIGIN: process.env.CORS_ORIGIN || 'http://localhost:3000',
     CLEANUP_INTERVAL_HOURS: parseInt(process.env.CLEANUP_INTERVAL_HOURS || '24'),
@@ -17,5 +16,6 @@ export const CONFIG = {
         SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY || '',
         REGION: process.env.AWS_REGION || 'us-east-1',
         S3_BUCKET_NAME: process.env.AWS_S3_BUCKET_NAME || ''
-    }
+    },
+    LIBREOFFICE_PATH: process.env.LIBREOFFICE_PATH || '/Applications/LibreOffice.app/Contents/MacOS/soffice'
 };
