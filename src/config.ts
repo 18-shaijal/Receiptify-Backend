@@ -17,5 +17,15 @@ export const CONFIG = {
         REGION: process.env.AWS_REGION || 'us-east-1',
         S3_BUCKET_NAME: process.env.AWS_S3_BUCKET_NAME || ''
     },
+    EMAIL: {
+        SMTP_HOST: process.env.EMAIL_SMTP_HOST || 'smtp.office365.com',
+        SMTP_PORT: parseInt(process.env.EMAIL_SMTP_PORT || '587'),
+        SMTP_USER: process.env.EMAIL_SMTP_USER || '',
+        SMTP_PASS: process.env.EMAIL_SMTP_PASS || '',
+        CLIENT_ID: process.env.EMAIL_CLIENT_ID || '',
+        CLIENT_SECRET: process.env.EMAIL_CLIENT_SECRET || '',
+        TENANT_ID: process.env.EMAIL_TENANT_ID || '',
+        REFRESH_TOKEN: process.env.EMAIL_REFRESH_TOKEN || '',
+    },
     LIBREOFFICE_PATH: process.env.LIBREOFFICE_PATH || '/Applications/LibreOffice.app/Contents/MacOS/soffice'
 };

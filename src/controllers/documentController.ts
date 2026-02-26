@@ -8,6 +8,7 @@ import { batchConvertDocx } from '../services/conversionService';
 import { streamZipToS3 } from '../services/zipService';
 import { uploadToS3, getPresignedDownloadUrl, downloadAsBuffer } from '../services/s3Service';
 import DocumentSession from '../models/documentModel';
+import { sendBulkEmails } from '../services/emailService';
 
 /**
  * Validate template and Excel match
@@ -323,6 +324,87 @@ export const downloadZip = async (req: Request, res: Response): Promise<void> =>
         res.status(500).json({
             success: false,
             error: 'Failed to generate download link'
+        });
+    }
+};
+
+/**
+ * Send emails with generated documents attached
+ */
+export const sendEmails = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { sessionId, emailColumn, emailSubject, emailBody, fileNamePattern } = req.body;
+
+        if (!sessionId || !emailColumn || !emailSubject) {
+            res.status(400).json({
+                success: false,
+                error: 'sessionId, emailColumn, and emailSubject are required'
+            });
+            return;
+        }
+
+        // Find session in MongoDB
+        const templateSession = await DocumentSession.findOne({ sessionId, fileType: 'template' });
+        const excelSession = await DocumentSession.findOne({ sessionId, fileType: 'excel' });
+
+        if (!templateSession || !excelSession) {
+            res.status(404).json({
+                success: false,
+                error: 'Session or files not found'
+            });
+            return;
+        }
+
+        // Download template and get rows
+        const templateBuffer = await downloadAsBuffer(templateSession.s3Key!);
+        const excelRows = excelSession.rows || [];
+
+        if (excelRows.length === 0) {
+            res.status(400).json({
+                success: false,
+                error: 'No data rows found'
+            });
+            return;
+        }
+
+        // Re-generate documents in-memory to get per-row buffers
+        const generationResult = await generateDocuments({
+            templateBuffer,
+            data: excelRows,
+            fileNameTemplate: fileNamePattern || req.body.fileNameTemplate // Support both naming styles
+        });
+
+        if (!generationResult.success || generationResult.filesGenerated.length === 0) {
+            res.status(500).json({
+                success: false,
+                error: 'Failed to generate documents for email attachments',
+                errors: generationResult.errors
+            });
+            return;
+        }
+
+        // Send bulk emails
+        const emailResult = await sendBulkEmails({
+            rows: excelRows,
+            emailColumn,
+            subjectTemplate: emailSubject,
+            bodyTemplate: emailBody || '',
+            generatedFiles: generationResult.filesGenerated,
+        });
+
+        res.json({
+            success: true,
+            data: {
+                totalSent: emailResult.totalSent,
+                totalFailed: emailResult.totalFailed,
+                results: emailResult.results
+            }
+        });
+    } catch (error: any) {
+        console.error('Error sending emails:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message || 'Failed to send emails'
         });
     }
 };

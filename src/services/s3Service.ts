@@ -26,8 +26,18 @@ export const uploadToS3 = async (filePath: string, key: string, contentType: str
         ContentType: contentType,
     });
 
-    await s3Client.send(command);
-    return key;
+    try {
+        await s3Client.send(command);
+        return key;
+    } catch (err: any) {
+        console.error('S3 upload error', {
+            message: err?.message,
+            name: err?.name,
+            code: err?.$metadata?.httpStatusCode || err?.code,
+            requestId: err?.$response?.requestId || err?.RequestId
+        });
+        throw err;
+    }
 };
 
 /**

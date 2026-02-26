@@ -100,10 +100,10 @@ export const uploadTemplate = async (req: Request, res: Response): Promise<void>
             }
         });
     } catch (error: any) {
-        console.error('Error uploading template:', error);
+        console.error('Error uploading template:', error?.message || error);
         res.status(500).json({
             success: false,
-            error: 'Failed to upload template'
+            error: process.env.NODE_ENV === 'production' ? 'Failed to upload template' : (error?.message || 'Failed to upload template')
         });
     }
 };
@@ -196,10 +196,10 @@ export const uploadExcel = async (req: Request, res: Response): Promise<void> =>
             }
         });
     } catch (error: any) {
-        console.error('Error uploading Excel:', error);
+        console.error('Error uploading Excel:', error?.message || error);
         res.status(500).json({
             success: false,
-            error: 'Failed to upload Excel file'
+            error: process.env.NODE_ENV === 'production' ? 'Failed to upload Excel file' : (error?.message || 'Failed to upload Excel file')
         });
     }
 };

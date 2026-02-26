@@ -3,7 +3,8 @@ import {
     validateFiles,
     generatePreview,
     generateDocumentsBulk,
-    downloadZip
+    downloadZip,
+    sendEmails
 } from '../controllers/documentController';
 
 const router = express.Router();
@@ -12,6 +13,7 @@ const router = express.Router();
 router.post('/validate', validateFiles);
 router.post('/preview', generatePreview);
 router.post('/generate', generateDocumentsBulk);
+router.post('/send-emails', sendEmails);
 
 // Download routes
 router.get('/download/zip/:sessionId', downloadZip);

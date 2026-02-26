@@ -46,14 +46,20 @@ export const generateDocuments = async (
                 nullGetter: () => '', // Replace null/undefined with empty string
             });
 
-            // Convert row data keys to uppercase for case-insensitive matching
-            const normalizedData: Record<string, any> = {};
+            // Provide data in multiple formats (original, uppercase, lowercase) 
+            // to ensure placeholders match regardless of case in the template.
+            const dataToRender: Record<string, any> = {};
             Object.keys(rowData).forEach(key => {
-                normalizedData[key.toUpperCase()] = rowData[key];
+                const value = rowData[key];
+                dataToRender[key] = value;
+                dataToRender[key.toUpperCase()] = value;
+                dataToRender[key.toLowerCase()] = value;
             });
 
+            console.log(`📝 Row ${rowNumber}: Processing document with keys: ${Object.keys(rowData).join(', ')}`);
+
             // Render document with data
-            doc.render(normalizedData);
+            doc.render(dataToRender);
 
             // Generate output
             const output = doc.getZip().generate({
@@ -99,14 +105,17 @@ export const generatePreviewDocument = async (
         nullGetter: () => '',
     });
 
-    // Convert data keys to uppercase
-    const normalizedData: Record<string, any> = {};
+    // Provide data in multiple formats (original, uppercase, lowercase)
+    const dataToRender: Record<string, any> = {};
     Object.keys(data).forEach(key => {
-        normalizedData[key.toUpperCase()] = data[key];
+        const value = data[key];
+        dataToRender[key] = value;
+        dataToRender[key.toUpperCase()] = value;
+        dataToRender[key.toLowerCase()] = value;
     });
 
     try {
-        doc.render(normalizedData);
+        doc.render(dataToRender);
     } catch (error: any) {
         throw formatDocxtemplaterError(error);
     }
