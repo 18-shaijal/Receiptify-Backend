@@ -2,7 +2,7 @@ import path from 'path';
 import PizZip from 'pizzip';
 import Docxtemplater from 'docxtemplater';
 import { sanitizeFilename } from '../utils/validators';
-import { formatDocxtemplaterError } from './templateService';
+import { formatDocxtemplaterError, normalizeKey } from './templateService';
 
 export interface GenerationOptions {
     templateBuffer: Buffer;
@@ -22,6 +22,24 @@ export interface GenerationResult {
 }
 
 /**
+ * Formats a value for display (numbers with commas, dates, etc.)
+ */
+const formatValue = (value: any): string => {
+    if (value === null || value === undefined) return '';
+
+    // Handle Numbers (thousand separators, 2 decimal places if needed)
+    if (typeof value === 'number') {
+        const isInteger = Number.isInteger(value);
+        return value.toLocaleString('en-US', {
+            minimumFractionDigits: isInteger ? 0 : 2,
+            maximumFractionDigits: 2
+        });
+    }
+
+    return String(value);
+};
+
+/**
  * Generates documents from template buffer and data
  */
 export const generateDocuments = async (
@@ -37,26 +55,30 @@ export const generateDocuments = async (
             const rowData = data[i];
             const rowNumber = i + 1;
 
-            // Create a new document instance for each row
+            // Provide data with normalized keys
+            const dataToRender: Record<string, any> = {};
+            Object.keys(rowData).forEach(key => {
+                dataToRender[normalizeKey(key)] = formatValue(rowData[key]);
+            });
+
             const zip = new PizZip(templateBuffer);
             const doc = new Docxtemplater(zip, {
                 paragraphLoop: true,
                 linebreaks: true,
                 delimiters: { start: '{{', end: '}}' },
-                nullGetter: () => '', // Replace null/undefined with empty string
+                nullGetter: () => '',
+                parser: (tag: string) => {
+                    const normalizedTag = normalizeKey(tag);
+                    return {
+                        get: (scope: any) => {
+                            if (tag === '.') return scope;
+                            return scope[normalizedTag] ?? scope[tag] ?? '';
+                        }
+                    };
+                }
             });
 
-            // Provide data in multiple formats (original, uppercase, lowercase) 
-            // to ensure placeholders match regardless of case in the template.
-            const dataToRender: Record<string, any> = {};
-            Object.keys(rowData).forEach(key => {
-                const value = rowData[key];
-                dataToRender[key] = value;
-                dataToRender[key.toUpperCase()] = value;
-                dataToRender[key.toLowerCase()] = value;
-            });
-
-            console.log(`📝 Row ${rowNumber}: Processing document with keys: ${Object.keys(rowData).join(', ')}`);
+            console.log(`📝 Row ${rowNumber}: Processing document with matching keys...`);
 
             // Render document with data
             doc.render(dataToRender);
@@ -98,20 +120,26 @@ export const generatePreviewDocument = async (
 ): Promise<Buffer> => {
     const zip = new PizZip(templateBuffer);
 
+    // Provide data with normalized keys
+    const dataToRender: Record<string, any> = {};
+    Object.keys(data).forEach(key => {
+        dataToRender[normalizeKey(key)] = formatValue(data[key]);
+    });
+
     const doc = new Docxtemplater(zip, {
         paragraphLoop: true,
         linebreaks: true,
         delimiters: { start: '{{', end: '}}' },
         nullGetter: () => '',
-    });
-
-    // Provide data in multiple formats (original, uppercase, lowercase)
-    const dataToRender: Record<string, any> = {};
-    Object.keys(data).forEach(key => {
-        const value = data[key];
-        dataToRender[key] = value;
-        dataToRender[key.toUpperCase()] = value;
-        dataToRender[key.toLowerCase()] = value;
+        parser: (tag: string) => {
+            const normalizedTag = normalizeKey(tag);
+            return {
+                get: (scope: any) => {
+                    if (tag === '.') return scope;
+                    return scope[normalizedTag] ?? scope[tag] ?? '';
+                }
+            };
+        }
     });
 
     try {
@@ -137,28 +165,20 @@ const generateFileName = (
     if (template) {
         let fileName = template;
 
-        // Normalize data keys to uppercase for matching
-        const normalizedData: Record<string, any> = {};
+        // Replace placeholders using normalized keys for maximum compatibility
         Object.keys(data).forEach(key => {
-            normalizedData[key.toUpperCase()] = data[key];
-        });
-
-        // Replace both {{KEY}} and {KEY} formats, globally and case-insensitively
-        // We iterate over all keys in data to replace them in the template
-        Object.keys(normalizedData).forEach(key => {
-            const value = normalizedData[key] || '';
+            const value = data[key] || '';
             const sanitizedValue = sanitizeFilename(String(value));
 
-            // Escape key for regex
+            // Original key
             const escapedKey = key.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+            fileName = fileName.replace(new RegExp(`{{${escapedKey}}}`, 'gi'), sanitizedValue);
+            fileName = fileName.replace(new RegExp(`{${escapedKey}}`, 'gi'), sanitizedValue);
 
-            // Replace {{KEY}}
-            const regexDouble = new RegExp(`{{${escapedKey}}}`, 'gi');
-            fileName = fileName.replace(regexDouble, sanitizedValue);
-
-            // Replace {KEY}
-            const regexSingle = new RegExp(`{${escapedKey}}`, 'gi');
-            fileName = fileName.replace(regexSingle, sanitizedValue);
+            // Normalized key
+            const normalizedK = normalizeKey(key);
+            fileName = fileName.replace(new RegExp(`{{${normalizedK}}}`, 'gi'), sanitizedValue);
+            fileName = fileName.replace(new RegExp(`{${normalizedK}}`, 'gi'), sanitizedValue);
         });
 
         // Ensure we don't have empty filename

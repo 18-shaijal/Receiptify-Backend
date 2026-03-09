@@ -1,12 +1,13 @@
 import nodemailer from 'nodemailer';
 import { CONFIG } from '../config';
+import { normalizeKey } from './templateService';
+import DocumentSession from '../models/documentModel';
 
 export interface EmailOptions {
     to: string;
     subject: string;
     body: string;
-    attachmentName: string;
-    attachmentBuffer: Buffer;
+    attachments: { name: string; content: Buffer }[];
 }
 
 export interface BulkEmailOptions {
@@ -14,7 +15,8 @@ export interface BulkEmailOptions {
     emailColumn: string;
     subjectTemplate: string;
     bodyTemplate: string;
-    generatedFiles: { name: string; content: Buffer }[];
+    generatedFiles: { name: string; content: Buffer }[][]; // Array of file arrays per row
+    sessionId?: string;
 }
 
 export interface EmailResult {
@@ -37,10 +39,16 @@ const replacePlaceholders = (template: string, data: Record<string, any>): strin
     let result = template;
     Object.keys(data).forEach(key => {
         const value = data[key] ?? '';
+
+        // Original key regex
         const escapedKey = key.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-        // Replace {{KEY}} (case-insensitive)
-        const regex = new RegExp(`{{${escapedKey}}}`, 'gi');
-        result = result.replace(regex, String(value));
+        const regexOriginal = new RegExp(`{{${escapedKey}}}`, 'gi');
+        result = result.replace(regexOriginal, String(value));
+
+        // Normalized key regex (e.g. {{STUDENTNAME}})
+        const normalizedK = normalizeKey(key);
+        const regexNormalized = new RegExp(`{{${normalizedK}}}`, 'gi');
+        result = result.replace(regexNormalized, String(value));
     });
     return result;
 };
@@ -96,12 +104,10 @@ export const sendEmailWithAttachment = async (options: EmailOptions, existingTra
         to: options.to,
         subject: options.subject,
         text: options.body,
-        attachments: [
-            {
-                filename: options.attachmentName,
-                content: options.attachmentBuffer,
-            },
-        ],
+        attachments: options.attachments.map(att => ({
+            filename: att.name,
+            content: att.content,
+        })),
     });
 
     return info;
@@ -112,7 +118,7 @@ export const sendEmailWithAttachment = async (options: EmailOptions, existingTra
  * Subject and body templates support {{PLACEHOLDER}} syntax.
  */
 export const sendBulkEmails = async (options: BulkEmailOptions): Promise<BulkEmailResult> => {
-    const { rows, emailColumn, subjectTemplate, bodyTemplate, generatedFiles } = options;
+    const { rows, emailColumn, subjectTemplate, bodyTemplate, generatedFiles, sessionId } = options;
 
     const results: EmailResult[] = [];
     let totalSent = 0;
@@ -124,6 +130,15 @@ export const sendBulkEmails = async (options: BulkEmailOptions): Promise<BulkEma
     const transporter = createTransporter();
 
     for (let i = 0; i < rows.length; i++) {
+        // Check for cancellation if sessionId is provided
+        if (sessionId) {
+            const session = await DocumentSession.findOne({ sessionId, fileType: 'excel' });
+            if (session?.isCancelled) {
+                console.log(`🛑 Bulk email send CANCELLED by user at row ${i + 1}`);
+                break;
+            }
+        }
+
         const row = rows[i];
         const email = row[emailColumn] || row[emailColumn.toUpperCase()] || row[emailColumn.toLowerCase()];
 
@@ -141,15 +156,15 @@ export const sendBulkEmails = async (options: BulkEmailOptions): Promise<BulkEma
 
         const recipientEmail = email.trim();
 
-        // Match the generated file for this row (by index)
-        const file = generatedFiles[i];
-        if (!file) {
-            console.error(`❌ Row ${i + 1}: No generated file found for index ${i}`);
+        // Match the generated files for this row (by index)
+        const rowFiles = generatedFiles[i];
+        if (!rowFiles || rowFiles.length === 0) {
+            console.error(`❌ Row ${i + 1}: No generated files found for index ${i}`);
             results.push({
                 row: i + 1,
                 email: recipientEmail,
                 status: 'failed',
-                error: 'No generated document found for this row',
+                error: 'No generated documents found for this row',
             });
             totalFailed++;
             continue;
@@ -160,14 +175,13 @@ export const sendBulkEmails = async (options: BulkEmailOptions): Promise<BulkEma
         const body = replacePlaceholders(bodyTemplate, row);
 
         try {
-            console.log(`✉️ [${i + 1}/${rows.length}] Sending to: ${recipientEmail}...`);
+            console.log(`✉️ [${i + 1}/${rows.length}] Sending to: ${recipientEmail} with ${rowFiles.length} attachments...`);
 
             const info = await sendEmailWithAttachment({
                 to: recipientEmail,
                 subject,
                 body,
-                attachmentName: file.name,
-                attachmentBuffer: file.content,
+                attachments: rowFiles.map(f => ({ name: f.name, content: f.content })),
             }, transporter);
 
             console.log(`✅ [${i + 1}/${rows.length}] Sent! MessageID: ${info.messageId}`);
@@ -184,12 +198,25 @@ export const sendBulkEmails = async (options: BulkEmailOptions): Promise<BulkEma
             totalFailed++;
         }
 
-        // Increased delay between emails to avoid Microsoft's OutboundSpamException
-        // Using a 5-10 second random delay to appear more "human-like"
+        // Delay between emails with early exit for cancellation
         if (i < rows.length - 1) {
             const delay = Math.floor(Math.random() * 5000) + 5000;
             console.log(`⏱️ Waiting ${delay / 1000}s before next email...`);
-            await new Promise(resolve => setTimeout(resolve, delay));
+
+            // Wait in small chunks to check for cancellation faster
+            const startTime = Date.now();
+            let cancelledInWait = false;
+            while (Date.now() - startTime < delay) {
+                await new Promise(resolve => setTimeout(resolve, 500));
+                if (sessionId) {
+                    const session = await DocumentSession.findOne({ sessionId, fileType: 'excel' });
+                    if (session?.isCancelled) {
+                        cancelledInWait = true;
+                        break;
+                    }
+                }
+            }
+            if (cancelledInWait) break;
         }
     }
 

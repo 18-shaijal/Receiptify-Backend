@@ -9,6 +9,7 @@ export interface IDocumentSession extends Document {
     createdAt: Date;
     rows?: Record<string, any>[]; // Store parsed Excel rows
     headers?: string[]; // Store Excel headers
+    isCancelled?: boolean; // Track if a bulk action was cancelled
 }
 
 const DocumentSessionSchema: Schema = new Schema({
@@ -19,7 +20,8 @@ const DocumentSessionSchema: Schema = new Schema({
     status: { type: String, enum: ['uploaded', 'processing', 'processed', 'failed'], default: 'uploaded' },
     createdAt: { type: Date, default: Date.now, expires: 86400 }, // Auto-delete after 24 hours
     rows: { type: [Schema.Types.Mixed] }, // Store parsed Excel rows
-    headers: { type: [String] } // Store Excel headers
+    headers: { type: [String] }, // Store Excel headers
+    isCancelled: { type: Boolean, default: false } // Default to not cancelled
 });
 
 export default mongoose.model<IDocumentSession>('DocumentSession', DocumentSessionSchema);

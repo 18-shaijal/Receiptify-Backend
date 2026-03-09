@@ -222,7 +222,11 @@ export const generateDocumentsBulk = async (req: Request, res: Response): Promis
 
         // Prepare files for ZIP
         const filesByFormat: Record<string, GeneratedFile[]> = {};
-        filesByFormat['.docx'] = generationResult.filesGenerated;
+
+        // Only include .docx if it was explicitly selected
+        if (selectedFormats.includes('.docx')) {
+            filesByFormat['.docx'] = generationResult.filesGenerated;
+        }
 
         // Handle conversion if needed
         const formatsToConvert = selectedFormats.filter((fmt: string) => fmt !== '.docx');
@@ -333,7 +337,8 @@ export const downloadZip = async (req: Request, res: Response): Promise<void> =>
  */
 export const sendEmails = async (req: Request, res: Response): Promise<void> => {
     try {
-        const { sessionId, emailColumn, emailSubject, emailBody, fileNamePattern } = req.body;
+        const { sessionId, emailColumn, emailSubject, emailBody, fileNamePattern, formats } = req.body;
+        const selectedFormats = formats || ['.docx'];
 
         if (!sessionId || !emailColumn || !emailSubject) {
             res.status(400).json({
@@ -367,7 +372,7 @@ export const sendEmails = async (req: Request, res: Response): Promise<void> => 
             return;
         }
 
-        // Re-generate documents in-memory to get per-row buffers
+        // Re-generate documents in-memory to get per-row buffers (DOCX base)
         const generationResult = await generateDocuments({
             templateBuffer,
             data: excelRows,
@@ -383,13 +388,55 @@ export const sendEmails = async (req: Request, res: Response): Promise<void> => 
             return;
         }
 
+        // Prepare attachments per row
+        const attachmentsPerRow: GeneratedFile[][] = generationResult.filesGenerated.map(file => {
+            // Include DOCX only if selected
+            return selectedFormats.includes('.docx') ? [file] : [];
+        });
+
+        // Handle conversion if non-DOCX formats are selected for email
+        const formatsToConvert = selectedFormats.filter((fmt: string) => fmt !== '.docx');
+        if (formatsToConvert.length > 0) {
+            console.log(`🔄 Converting email attachments to: ${formatsToConvert.join(', ')}`);
+            const conversionDir = path.join(os.tmpdir(), `email_conv_${sessionId}`);
+            if (!fs.existsSync(conversionDir)) fs.mkdirSync(conversionDir, { recursive: true });
+
+            const docxPaths: string[] = [];
+            for (let i = 0; i < generationResult.filesGenerated.length; i++) {
+                const file = generationResult.filesGenerated[i];
+                const filePath = path.join(conversionDir, `row_${i}_${file.name}`);
+                fs.writeFileSync(filePath, file.content);
+                docxPaths.push(filePath);
+            }
+
+            const conversionResults = await batchConvertDocx(
+                docxPaths,
+                conversionDir,
+                formatsToConvert
+            );
+
+            // Add converted files to the respective rows
+            for (const paths of Object.values(conversionResults)) {
+                paths.forEach((p, index) => {
+                    attachmentsPerRow[index].push({
+                        name: path.basename(p).replace(/^row_\d+_/, ''),
+                        content: fs.readFileSync(p)
+                    });
+                });
+            }
+
+            // Cleanup
+            fs.rmSync(conversionDir, { recursive: true, force: true });
+        }
+
         // Send bulk emails
         const emailResult = await sendBulkEmails({
             rows: excelRows,
             emailColumn,
             subjectTemplate: emailSubject,
             bodyTemplate: emailBody || '',
-            generatedFiles: generationResult.filesGenerated,
+            generatedFiles: attachmentsPerRow,
+            sessionId: sessionId,
         });
 
         res.json({
@@ -405,6 +452,41 @@ export const sendEmails = async (req: Request, res: Response): Promise<void> => 
         res.status(500).json({
             success: false,
             error: error.message || 'Failed to send emails'
+        });
+    }
+};
+
+/**
+ * Cancels an ongoing bulk email sending process
+ */
+export const cancelEmails = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { sessionId } = req.body;
+
+        if (!sessionId) {
+            res.status(400).json({
+                success: false,
+                error: 'sessionId is required'
+            });
+            return;
+        }
+
+        // Set isCancelled to true for all sessions with this sessionId
+        // (Usually there's one for template and one for excel)
+        await DocumentSession.updateMany(
+            { sessionId },
+            { $set: { isCancelled: true } }
+        );
+
+        res.json({
+            success: true,
+            message: 'Cancellation signal sent successfully'
+        });
+    } catch (error: any) {
+        console.error('Error cancelling emails:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message || 'Failed to cancel email process'
         });
     }
 };

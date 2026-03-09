@@ -65,14 +65,17 @@ export const parseExcelFile = async (input: string | Buffer): Promise<ExcelData>
                 }
                 // Handle rich text
                 else if ('richText' in value) {
-                    value = value.richText.map((rt: any) => rt.text).join('');
+                    value = (value as any).richText.map((rt: any) => rt.text).join('');
                 }
                 // Handle formulas - use result
                 else if ('result' in value) {
-                    value = value.result;
+                    value = (value as any).result;
+                    if (typeof value === 'number') value = formatExcelNumber(value);
                 } else {
                     value = value.toString();
                 }
+            } else if (typeof value === 'number') {
+                value = formatExcelNumber(value);
             }
 
             rowData[header] = value;
@@ -89,16 +92,30 @@ export const parseExcelFile = async (input: string | Buffer): Promise<ExcelData>
 };
 
 /**
- * Formats date to readable string
+ * Formats date to readable string (DD/MM/YYYY)
  */
 const formatDate = (date: Date): string => {
-    // Check if date is valid
-    if (isNaN(date.getTime())) return '';
-
+    if (!date || isNaN(date.getTime())) return '';
     const day = String(date.getDate()).padStart(2, '0');
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const year = date.getFullYear();
     return `${day}/${month}/${year}`;
+};
+
+/**
+ * Formats a number with commas and consistent decimals
+ */
+const formatExcelNumber = (value: number): string | number => {
+    // If it's a large number or has decimals, we might want to return it as a string 
+    // to preserve formatting, but Docxtemplater handles numbers too.
+    // However, the user specifically asked for "correct" data like amounts.
+    if (value > 999 || !Number.isInteger(value)) {
+        return value.toLocaleString('en-US', {
+            minimumFractionDigits: Number.isInteger(value) ? 0 : 2,
+            maximumFractionDigits: 5 // Allow some precision but keep it clean
+        });
+    }
+    return value;
 };
 
 /**

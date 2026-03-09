@@ -11,7 +11,15 @@ export interface ValidationResult {
     missingInExcel: string[];
     extraInExcel: string[];
     warnings: string[];
+    matchedCount: number;
 }
+
+/**
+ * Normalizes a key for fuzzy matching (removes spaces, underscores, dashes and uppercases)
+ */
+export const normalizeKey = (key: string): string => {
+    return key.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+};
 
 /**
  * Extracts placeholders from DOCX template
@@ -43,7 +51,7 @@ export const extractPlaceholders = (templatePath: string): TemplateInfo => {
 };
 
 /**
- * Validates template against Excel headers
+ * Validates template against Excel headers with fuzzy matching
  */
 export const validateTemplate = (
     templatePlaceholders: string[],
@@ -53,20 +61,37 @@ export const validateTemplate = (
     const extraInExcel: string[] = [];
     const warnings: string[] = [];
 
-    // Convert to uppercase for case-insensitive comparison
-    const templateSet = new Set(templatePlaceholders.map(p => p.toUpperCase()));
-    const excelSet = new Set(excelHeaders.map(h => h.toUpperCase()));
+    // Create normalized maps for fuzzy matching
+    const normalizedExcelHeaders = new Map<string, string>();
+    excelHeaders.forEach(header => {
+        normalizedExcelHeaders.set(normalizeKey(header), header);
+    });
+
+    const normalizedTemplatePlaceholders = new Map<string, string>();
+    templatePlaceholders.forEach(placeholder => {
+        normalizedTemplatePlaceholders.set(normalizeKey(placeholder), placeholder);
+    });
 
     // Check for placeholders in template not in Excel
-    templateSet.forEach(placeholder => {
-        if (!excelSet.has(placeholder)) {
+    templatePlaceholders.forEach(placeholder => {
+        const normalizedP = normalizeKey(placeholder);
+        if (!normalizedExcelHeaders.has(normalizedP)) {
             missingInExcel.push(placeholder);
+        } else {
+            // Check if it's a perfect match or a fuzzy match
+            const originalH = normalizedExcelHeaders.get(normalizedP);
+            if (originalH !== placeholder) {
+                // Fuzzy match found (e.g. "student name" matches "STUDENT_NAME")
+                // We don't add a warning here because the generation logic will handle it,
+                // but we could if we wanted to be strict.
+            }
         }
     });
 
     // Check for Excel columns not used in template
-    excelSet.forEach(header => {
-        if (!templateSet.has(header)) {
+    excelHeaders.forEach(header => {
+        const normalizedH = normalizeKey(header);
+        if (!normalizedTemplatePlaceholders.has(normalizedH)) {
             extraInExcel.push(header);
         }
     });
@@ -78,28 +103,22 @@ export const validateTemplate = (
         );
     }
 
-    if (extraInExcel.length > 0) {
-        warnings.push(
-            `Excel contains columns not used in template: ${extraInExcel.join(', ')}`
-        );
-    }
-
     const valid = missingInExcel.length === 0;
 
     return {
         valid,
         missingInExcel,
         extraInExcel,
-        warnings
+        warnings,
+        matchedCount: templatePlaceholders.length - missingInExcel.length
     };
 };
 
 /**
- * Validates placeholder format
+ * Validates placeholder format (relaxed to allow spaces and symbols common in casual docs)
  */
 export const isValidPlaceholderFormat = (placeholder: string): boolean => {
-    // Should be alphanumeric and underscores only
-    return /^[A-Z0-9_]+$/.test(placeholder);
+    return /^[\w\s\-\.]+$/i.test(placeholder);
 };
 
 /**

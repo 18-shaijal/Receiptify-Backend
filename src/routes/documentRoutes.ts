@@ -4,7 +4,8 @@ import {
     generatePreview,
     generateDocumentsBulk,
     downloadZip,
-    sendEmails
+    sendEmails,
+    cancelEmails
 } from '../controllers/documentController';
 
 const router = express.Router();
@@ -14,6 +15,7 @@ router.post('/validate', validateFiles);
 router.post('/preview', generatePreview);
 router.post('/generate', generateDocumentsBulk);
 router.post('/send-emails', sendEmails);
+router.post('/cancel-emails', cancelEmails);
 
 // Download routes
 router.get('/download/zip/:sessionId', downloadZip);
